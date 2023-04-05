@@ -1,0 +1,18 @@
+syntax="proto3";
+
+package protobuf;
+
+option go_package = "./stream";
+
+message Request {
+  int64 ID = 10;
+}
+
+message Response {
+  string resp = 10;
+}
+
+service streamService {
+  rpc FetchResponse (Request) returns (stream Response) {}
+}
+
