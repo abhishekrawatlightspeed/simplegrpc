@@ -1,0 +1,29 @@
+syntax="proto3";
+
+package protobuf;
+
+option go_package = "./stream";
+
+message User {
+  string ID = 10;
+  string name  = 20;
+}
+
+message Message {
+  string id = 10;
+  User user = 20;
+  string message = 30;
+  string timestamp = 40;
+}
+
+message Connect {
+  User user = 10;
+  bool active = 20;
+}
+
+message Close{}
+
+service Cast {
+  rpc CreateStream(Connect) returns (stream Message);
+  rpc CastMessage(Message) returns (Close);
+}

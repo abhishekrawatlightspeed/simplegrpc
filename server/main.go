@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/simplegrpc/stream"
 	"google.golang.org/grpc"
@@ -16,33 +16,58 @@ var (
 	port = flag.Int("port", 9009, "The server port")
 )
 
-type Server struct {
-	stream.UnsafeStreamServiceServer
+type Connection struct {
+	ID     string
+	Stream stream.Cast_CreateStreamServer
+	Active bool
+	err    chan error
 }
 
-func (s Server) FetchResponse(in *stream.Request, srv stream.StreamService_FetchResponseServer) error {
+type Server struct {
+	stream.UnimplementedCastServer
+	Connections []*Connection
+}
 
-	log.Printf("fetching response for id - %d", in.ID)
+func (s *Server) CreateStream(userConn *stream.Connect, stream stream.Cast_CreateStreamServer) error {
+	conn := &Connection{
+		Stream: stream,
+		ID:     userConn.User.ID,
+		Active: true,
+		err:    make(chan error),
+	}
+	s.Connections = append(s.Connections, conn)
+	return <-conn.err
+}
 
-	//use wait group to allow process to be concurrent
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func(count int64) {
-			defer wg.Done()
+func (s *Server) CastMessage(ctx context.Context, msg *stream.Message) (*stream.Close, error) {
+	wait := sync.WaitGroup{}
+	done := make(chan int)
 
-			//time sleep to simulate server process time
-			time.Sleep(time.Duration(count) * time.Second)
-			resp := stream.Response{Resp: fmt.Sprintf("Request #%d For Id:%d", count, in.ID)}
-			if err := srv.Send(&resp); err != nil {
-				log.Printf("error sending message %v", err)
+	for _, connection := range s.Connections {
+		log.Printf("rececing connection for connection with #%d", connection.ID)
+		wait.Add(1)
+
+		go func(msg *stream.Message, conn *Connection) {
+			defer wait.Done()
+
+			if conn.Active {
+				log.Printf("Sending message %s to user %s", msg.Message, msg.User.ID)
+				if err := conn.Stream.Send(msg); err != nil {
+					log.Printf("Error with stream %v. Error: %v", conn.Stream, err)
+					conn.Active = false
+					conn.err <- err
+				}
 			}
-			log.Printf("finishing request  : %d", count)
-		}(int64(i))
+		}(msg, connection)
 	}
 
-	wg.Wait()
-	return nil
+	go func() {
+		wait.Wait()
+		close(done)
+	}()
+
+	<-done
+	return &stream.Close{}, nil
 }
 
 func main() {
@@ -52,15 +77,11 @@ func main() {
 	}
 	grpcServer := grpc.NewServer()
 
-	stream.RegisterStreamServiceServer(grpcServer, &Server{})
+	stream.RegisterCastServer(grpcServer, &Server{})
 
-	log.Println("start server")
+	log.Println("starting server......")
 
 	if err := grpcServer.Serve(tcpListener); err != nil {
 		log.Fatalf("failed to serve: %v", err)
-	}
-
-	if err := grpcServer.Serve(tcpListener); err != nil {
-		log.Fatalf("error occurred when grpc server is listening to tcp listerner %v", err)
 	}
 }
